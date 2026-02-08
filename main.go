@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -89,18 +92,24 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 解析表单 (最大 100MB)
-	if err := r.ParseMultipartForm(100 << 20); err != nil {
+	// 解析表单 (最大 500MB，支持多个文件)
+	if err := r.ParseMultipartForm(500 << 20); err != nil {
 		http.Error(w, "解析表单失败: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	file, header, err := r.FormFile("audio")
-	if err != nil {
-		http.Error(w, "获取文件失败: "+err.Error(), http.StatusBadRequest)
+	// 获取语言参数
+	lang := r.FormValue("lang")
+	if lang == "" {
+		lang = "auto"
+	}
+
+	// 检查是否有文件上传
+	files := r.MultipartForm.File["audio"]
+	if len(files) == 0 {
+		http.Error(w, "未找到文件", http.StatusBadRequest)
 		return
 	}
-	defer file.Close()
 
 	// 创建临时目录
 	tmpDir := "./tmp"
@@ -109,47 +118,102 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 保存上传的文件到临时位置
-	tmpFileName := fmt.Sprintf("%s_%d%s", filepath.Base(header.Filename), time.Now().UnixNano(), filepath.Ext(header.Filename))
-	tmpFilePath := filepath.Join(tmpDir, tmpFileName)
+	// 创建一个缓冲区来存储zip文件
+	var zipBuffer bytes.Buffer
+	zipWriter := zip.NewWriter(&zipBuffer)
 
-	dst, err := os.Create(tmpFilePath)
-	if err != nil {
-		http.Error(w, "创建临时文件失败", http.StatusInternalServerError)
-		return
-	}
+	// 处理每个文件
+	successCount := 0
+	failCount := 0
+	var errors []string
 
-	if _, err := io.Copy(dst, file); err != nil {
+	for _, fileHeader := range files {
+		// 打开上传的文件
+		file, err := fileHeader.Open()
+		if err != nil {
+			failCount++
+			errors = append(errors, fmt.Sprintf("%s: 打开文件失败", fileHeader.Filename))
+			continue
+		}
+
+		// 保存到临时位置
+		tmpFileName := fmt.Sprintf("%s_%d%s", filepath.Base(fileHeader.Filename), time.Now().UnixNano(), filepath.Ext(fileHeader.Filename))
+		tmpFilePath := filepath.Join(tmpDir, tmpFileName)
+
+		dst, err := os.Create(tmpFilePath)
+		if err != nil {
+			file.Close()
+			failCount++
+			errors = append(errors, fmt.Sprintf("%s: 创建临时文件失败", fileHeader.Filename))
+			continue
+		}
+
+		if _, err := io.Copy(dst, file); err != nil {
+			dst.Close()
+			file.Close()
+			os.Remove(tmpFilePath)
+			failCount++
+			errors = append(errors, fmt.Sprintf("%s: 保存文件失败", fileHeader.Filename))
+			continue
+		}
 		dst.Close()
-		os.Remove(tmpFilePath)
-		http.Error(w, "保存文件失败", http.StatusInternalServerError)
-		return
+		file.Close()
+
+		// 确保最后删除临时文件
+		defer os.Remove(tmpFilePath)
+
+		// 执行识别
+		text, err := recognizeWithPython(tmpFilePath, lang)
+		if err != nil {
+			failCount++
+			errors = append(errors, fmt.Sprintf("%s: %s", fileHeader.Filename, err.Error()))
+			continue
+		}
+
+		// 生成txt文件名（与音频文件同名）
+		txtFileName := filepath.Base(fileHeader.Filename)
+		txtFileName = strings.TrimSuffix(txtFileName, filepath.Ext(txtFileName)) + ".txt"
+
+		// 将文本添加到zip中
+		writer, err := zipWriter.Create(txtFileName)
+		if err != nil {
+			failCount++
+			errors = append(errors, fmt.Sprintf("%s: 创建zip条目失败", fileHeader.Filename))
+			continue
+		}
+
+		_, err = writer.Write([]byte(text))
+		if err != nil {
+			failCount++
+			errors = append(errors, fmt.Sprintf("%s: 写入zip失败", fileHeader.Filename))
+			continue
+		}
+
+		successCount++
 	}
-	dst.Close()
 
-	// 确保最后删除临时文件
-	defer os.Remove(tmpFilePath)
-
-	// 获取语言参数
-	lang := r.FormValue("lang")
-	if lang == "" {
-		lang = "auto"
-	}
-
-	// 执行识别
-	text, err := recognizeWithPython(tmpFilePath, lang)
+	// 关闭zip writer
+	err := zipWriter.Close()
 	if err != nil {
-		http.Error(w, "识别失败: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "创建zip文件失败", http.StatusInternalServerError)
 		return
 	}
 
-	// 返回结果
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":  true,
-		"text":     text,
-		"filename": header.Filename,
-	})
+	// 如果全部失败
+	if successCount == 0 {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "所有文件处理失败",
+			"errors":  errors,
+		})
+		return
+	}
+
+	// 设置响应头，下载zip文件
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="transcripts.zip"`)
+	w.Write(zipBuffer.Bytes())
 }
 
 func recognizeWithPython(audioPath, lang string) (string, error) {
@@ -384,22 +448,90 @@ const htmlTemplate = `<!DOCTYPE html>
         .error-message.show {
             display: block;
         }
+        .mode-select {
+            margin-bottom: 20px;
+        }
+        .mode-select label {
+            color: #666;
+            font-size: 14px;
+            display: block;
+            margin-bottom: 8px;
+        }
+        .mode-buttons {
+            display: flex;
+            gap: 10px;
+        }
+        .mode-btn {
+            flex: 1;
+            background: #f8f9ff;
+            border: 2px solid #e8ebff;
+            color: #667eea;
+            padding: 12px;
+            border-radius: 10px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .mode-btn:hover {
+            background: #f0f2ff;
+        }
+        .mode-btn.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-color: #667eea;
+        }
+        .progress-container {
+            margin-top: 20px;
+            display: none;
+        }
+        .progress-container.show {
+            display: block;
+        }
+        .progress-item {
+            background: #f8f9ff;
+            padding: 10px;
+            margin-bottom: 8px;
+            border-radius: 8px;
+            font-size: 13px;
+        }
+        .progress-item.success {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+        .progress-item.error {
+            background: #ffebee;
+            color: #c62828;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <p class="subtitle">基于 Whisper，支持中英文语音识别</p>
 
+        <div class="mode-select">
+            <label>选择模式:</label>
+            <div class="mode-buttons">
+                <button class="mode-btn active" id="singleFileBtn">单个文件</button>
+                <button class="mode-btn" id="folderBtn">文件夹批量</button>
+            </div>
+        </div>
+
         <div class="upload-area" id="uploadArea">
             <div class="upload-icon">📁</div>
-            <div class="upload-text">点击或拖拽音频文件到此处</div>
-            <div class="upload-hint">支持 WAV, MP3, M4A 等格式</div>
+            <div class="upload-text" id="uploadText">点击或拖拽音频文件到此处</div>
+            <div class="upload-hint" id="uploadHint">支持 WAV, MP3, M4A 等格式</div>
         </div>
 
         <input type="file" id="fileInput" accept="audio/*">
+        <input type="file" id="folderInput" accept="audio/*" webkitdirectory directory multiple style="display: none;">
 
         <div class="file-info" id="fileInfo">
-            <span class="file-name" id="fileName"></span>
+            <div class="file-name" id="fileName"></div>
+        </div>
+
+        <div class="progress-container" id="progressContainer">
+            <div style="color: #666; margin-bottom: 10px;">处理进度:</div>
+            <div id="progressList"></div>
         </div>
 
         <div class="language-select">
@@ -429,6 +561,7 @@ const htmlTemplate = `<!DOCTYPE html>
     <script>
         const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
+        const folderInput = document.getElementById('folderInput');
         const fileInfo = document.getElementById('fileInfo');
         const fileName = document.getElementById('fileName');
         const recognizeBtn = document.getElementById('recognizeBtn');
@@ -437,10 +570,43 @@ const htmlTemplate = `<!DOCTYPE html>
         const resultText = document.getElementById('resultText');
         const errorMessage = document.getElementById('errorMessage');
         const languageSelect = document.getElementById('language');
+        const singleFileBtn = document.getElementById('singleFileBtn');
+        const folderBtn = document.getElementById('folderBtn');
+        const uploadText = document.getElementById('uploadText');
+        const uploadHint = document.getElementById('uploadHint');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressList = document.getElementById('progressList');
 
-        let selectedFile = null;
+        let selectedFiles = [];
+        let isFolderMode = false;
 
-        uploadArea.addEventListener('click', () => fileInput.click());
+        singleFileBtn.addEventListener('click', () => {
+            isFolderMode = false;
+            singleFileBtn.classList.add('active');
+            folderBtn.classList.remove('active');
+            uploadText.textContent = '点击或拖拽音频文件到此处';
+            uploadHint.textContent = '支持 WAV, MP3, M4A 等格式';
+            selectedFiles = [];
+            updateFileInfo();
+        });
+
+        folderBtn.addEventListener('click', () => {
+            isFolderMode = true;
+            folderBtn.classList.add('active');
+            singleFileBtn.classList.remove('active');
+            uploadText.textContent = '点击选择文件夹';
+            uploadHint.textContent = '将处理文件夹中的所有音频文件';
+            selectedFiles = [];
+            updateFileInfo();
+        });
+
+        uploadArea.addEventListener('click', () => {
+            if (isFolderMode) {
+                folderInput.click();
+            } else {
+                fileInput.click();
+            }
+        });
 
         uploadArea.addEventListener('dragover', (e) => {
             e.preventDefault();
@@ -466,27 +632,62 @@ const htmlTemplate = `<!DOCTYPE html>
             }
         });
 
+        folderInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                // 过滤音频文件
+                const audioFiles = Array.from(e.target.files).filter(file => file.type.startsWith('audio/'));
+                if (audioFiles.length === 0) {
+                    showError('所选文件夹中没有音频文件');
+                    return;
+                }
+                handleMultipleFiles(audioFiles);
+            }
+        });
+
         function handleFile(file) {
             if (!file.type.startsWith('audio/')) {
                 showError('请选择音频文件');
                 return;
             }
-            selectedFile = file;
-            fileName.textContent = file.name;
-            fileInfo.classList.add('show');
+            selectedFiles = [file];
+            updateFileInfo();
             recognizeBtn.disabled = false;
             hideError();
         }
 
+        function handleMultipleFiles(files) {
+            selectedFiles = files;
+            updateFileInfo();
+            recognizeBtn.disabled = false;
+            hideError();
+        }
+
+        function updateFileInfo() {
+            if (selectedFiles.length === 0) {
+                fileInfo.classList.remove('show');
+                return;
+            }
+            fileInfo.classList.add('show');
+            if (selectedFiles.length === 1) {
+                fileName.textContent = '已选择: ' + selectedFiles[0].name;
+            } else {
+                fileName.textContent = '已选择 ' + selectedFiles.length + ' 个音频文件';
+            }
+        }
+
         recognizeBtn.addEventListener('click', async () => {
-            if (!selectedFile) return;
+            if (selectedFiles.length === 0) return;
 
             const formData = new FormData();
-            formData.append('audio', selectedFile);
+            selectedFiles.forEach(file => {
+                formData.append('audio', file);
+            });
             formData.append('lang', languageSelect.value);
 
             loading.classList.add('show');
             resultArea.classList.remove('show');
+            progressContainer.classList.remove('show');
+            progressList.innerHTML = '';
             recognizeBtn.disabled = true;
             hideError();
 
@@ -496,16 +697,33 @@ const htmlTemplate = `<!DOCTYPE html>
                     body: formData
                 });
 
-                const data = await response.json();
-
                 if (!response.ok) {
-                    throw new Error(data.error || '识别失败');
+                    const data = await response.json();
+                    throw new Error(data.error || '处理失败');
                 }
 
-                resultText.textContent = data.text || '(未识别到文字)';
-                resultArea.classList.add('show');
+                // 检查响应类型
+                const contentType = response.headers.get('Content-Type');
+                if (contentType && contentType.includes('application/zip')) {
+                    // 下载zip文件
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'transcripts.zip';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+
+                    resultText.textContent = '成功处理 ' + selectedFiles.length + ' 个文件！\n\n已下载 transcripts.zip，解压后将生成与音频文件同名的txt文件。';
+                    resultArea.classList.add('show');
+                } else {
+                    const data = await response.json();
+                    throw new Error(data.error || '处理失败');
+                }
             } catch (error) {
-                showError('识别失败: ' + error.message);
+                showError('处理失败: ' + error.message);
             } finally {
                 loading.classList.remove('show');
                 recognizeBtn.disabled = false;
