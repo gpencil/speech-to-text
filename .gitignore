@@ -15,17 +15,5 @@ tmp/
 .DS_Store
 Thumbs.db
 
-# 模型缓存（自动下载，不需要提交）
+# 模型文件（需手动下载）
 models/
-
-# Python 缓存
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-
-# 虚拟环境
-venv/
-env/
-ENV/
