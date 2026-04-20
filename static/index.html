@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FunASR 调试台</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0a0e14;
+      --panel: #12181f;
+      --border: #1e2836;
+      --text: #e6edf3;
+      --muted: #8b9cb3;
+      --accent: #3dd6c3;
+      --accent-dim: rgba(61, 214, 195, 0.15);
+      --danger: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "DM Sans", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(61, 214, 195, 0.12), transparent),
+        linear-gradient(180deg, var(--bg) 0%, #07090c 100%);
+    }
+    .wrap {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 2.5rem 1.25rem 4rem;
+    }
+    header {
+      margin-bottom: 2rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 1.25rem;
+    }
+    h1 {
+      font-size: 1.65rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin: 0 0 0.35rem;
+    }
+    .sub {
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem 1.35rem;
+      margin-bottom: 1rem;
+    }
+    .drop {
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      padding: 2rem 1rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      background: rgba(0,0,0,0.2);
+    }
+    .drop:hover, .drop.dragover {
+      border-color: var(--accent);
+      background: var(--accent-dim);
+    }
+    .drop strong { color: var(--accent); }
+    input[type="file"] { display: none; }
+    label.file-btn {
+      display: inline-block;
+      margin-top: 0.75rem;
+      padding: 0.5rem 1rem;
+      background: var(--accent-dim);
+      color: var(--accent);
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: flex-end;
+      margin-top: 1rem;
+    }
+    .field { flex: 1; min-width: 200px; }
+    .field label {
+      display: block;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+    .field input[type="text"] {
+      width: 100%;
+      padding: 0.6rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0d1218;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.95rem;
+    }
+    button.run {
+      padding: 0.65rem 1.4rem;
+      border: none;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #2dd4bf, #14b8a6);
+      color: #042f2e;
+      font-weight: 700;
+      font-size: 0.95rem;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    button.run:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 0.5rem;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .metrics span.val { color: var(--accent); }
+    .out-title {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin-bottom: 0.5rem;
+    }
+    pre.out {
+      margin: 0;
+      padding: 1rem;
+      border-radius: 8px;
+      background: #0d1218;
+      border: 1px solid var(--border);
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.9rem;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      word-break: break-word;
+      min-height: 120px;
+    }
+    .err {
+      color: var(--danger);
+      font-size: 0.9rem;
+      margin-top: 0.5rem;
+    }
+    .file-name { font-size: 0.85rem; color: var(--muted); margin-top: 0.5rem; }
+    .banner {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin: 0.75rem 0 0;
+      padding: 0.65rem 0.85rem;
+      border-radius: 8px;
+      background: rgba(0,0,0,0.25);
+      border: 1px solid var(--border);
+    }
+    .banner.ready { color: var(--accent); border-color: rgba(61, 214, 195, 0.35); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>FunASR 调试台</h1>
+      <p class="sub">上传音频（WAV / MP3 / M4A 等），查看识别文本与耗时。默认链路：<strong>Paraformer + VAD + 标点</strong>。</p>
+      <p class="banner" id="banner">正在连接服务…</p>
+    </header>
+
+    <div class="panel">
+      <div class="drop" id="drop">
+        <div>将音频拖到此处，或点击下方选择文件</div>
+        <label class="file-btn" for="file">选择文件</label>
+        <input type="file" id="file" accept="audio/*" />
+        <div class="file-name" id="fname"></div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="hotword">热词（可选，空格分隔）</label>
+          <input type="text" id="hotword" placeholder="例如：魔搭 阿里巴巴" autocomplete="off" />
+        </div>
+        <button type="button" class="run" id="run" disabled>开始识别</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="metrics" id="metrics" style="display:none;">
+        <div>音频时长 <span class="val" id="m-audio">—</span> s</div>
+        <div>推理耗时 <span class="val" id="m-wall">—</span> s</div>
+        <div>RTF <span class="val" id="m-rtf">—</span></div>
+        <div>模型 <span class="val" id="m-model">—</span></div>
+      </div>
+      <p class="out-title" style="margin-top:1rem;">识别结果</p>
+      <pre class="out" id="out">等待上传…</pre>
+      <div class="err" id="err"></div>
+    </div>
+  </div>
+  <script>
+    const drop = document.getElementById('drop');
+    const fileInput = document.getElementById('file');
+    const runBtn = document.getElementById('run');
+    const fname = document.getElementById('fname');
+    const out = document.getElementById('out');
+    const err = document.getElementById('err');
+    const metrics = document.getElementById('metrics');
+    let selected = null;
+
+    /** Always read body as text first — server errors may be HTML/plain, not JSON. */
+    async function readJsonSafe(res) {
+      const raw = await res.text();
+      try {
+        return { data: JSON.parse(raw), raw };
+      } catch {
+        return { data: null, raw };
+      }
+    }
+
+    function setFile(f) {
+      selected = f;
+      fname.textContent = f ? f.name : '';
+      runBtn.disabled = !f;
+      err.textContent = '';
+    }
+    fileInput.addEventListener('change', () => setFile(fileInput.files[0] || null));
+    drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('dragover'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('dragover'));
+    drop.addEventListener('drop', (e) => {
+      e.preventDefault();
+      drop.classList.remove('dragover');
+      const f = e.dataTransfer.files[0];
+      if (f && f.type.startsWith('audio')) setFile(f);
+    });
+    drop.addEventListener('click', (e) => { if (e.target.tagName !== 'LABEL' && e.target !== fileInput) fileInput.click(); });
+
+    async function pollReady() {
+      const el = document.getElementById('banner');
+      try {
+        const r = await fetch('/api/ready');
+        const { data: d, raw } = await readJsonSafe(r);
+        if (!d) {
+          el.textContent = '服务返回非 JSON（' + r.status + '）：' + (raw.slice(0, 120) || r.statusText);
+          el.classList.remove('ready');
+          return;
+        }
+        if (d.error) {
+          el.textContent = '/api/ready 错误：' + d.error;
+          el.classList.remove('ready');
+          return;
+        }
+        if (d.ready) {
+          el.textContent = '模型已就绪：' + (d.model || '—');
+          el.classList.add('ready');
+          return;
+        }
+        el.classList.remove('ready');
+        el.textContent = '模型尚未加载：首次点击「开始识别」时会下载并加载 FunASR（可能数分钟～很久），请耐心等待；本页可先打开。';
+      } catch (e) {
+        el.textContent = '无法请求 /api/ready：' + e;
+        el.classList.remove('ready');
+      }
+    }
+    pollReady();
+    setInterval(pollReady, 8000);
+
+    runBtn.addEventListener('click', async () => {
+      if (!selected) return;
+      out.textContent = '识别中…';
+      metrics.style.display = 'none';
+      err.textContent = '';
+      runBtn.disabled = true;
+      const fd = new FormData();
+      fd.append('audio', selected);
+      fd.append('hotword', document.getElementById('hotword').value.trim());
+      try {
+        const res = await fetch('/api/transcribe', { method: 'POST', body: fd });
+        const { data, raw } = await readJsonSafe(res);
+        if (!data) {
+          out.textContent = '';
+          err.textContent = '服务返回非 JSON（' + res.status + '）：' + (raw.slice(0, 200) || res.statusText);
+          return;
+        }
+        if (!res.ok || data.ok === false) {
+          out.textContent = '';
+          var msg = data.error || ('请求失败 HTTP ' + res.status);
+          if (data.detail) {
+            msg += '\n\n' + String(data.detail).slice(0, 4000);
+          }
+          err.textContent = msg;
+          return;
+        }
+        pollReady();
+        out.textContent = data.text || '（空）';
+        metrics.style.display = 'grid';
+        document.getElementById('m-audio').textContent = (data.audio_seconds ?? 0).toFixed(2);
+        document.getElementById('m-wall').textContent = (data.wall_seconds ?? 0).toFixed(2);
+        document.getElementById('m-rtf').textContent = (data.rtf ?? 0).toFixed(3);
+        document.getElementById('m-model').textContent = data.model || '—';
+      } catch (e) {
+        out.textContent = '';
+        err.textContent = String(e);
+      } finally {
+        runBtn.disabled = !selected;
+      }
+    });
+  </script>
+</body>
+</html>

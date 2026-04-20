@@ -1,0 +1,9 @@
+# FunASR 语音识别服务
+torch>=2.0
+torchaudio
+funasr>=1.0.0
+huggingface_hub>=0.21.0
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.9

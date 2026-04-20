@@ -1,4 +1,0 @@
-# github.com/ggerganov/whisper.cpp/bindings/go v0.0.0-20260130135936-aa1bc0d1a6df
-## explicit; go 1.23
-github.com/ggerganov/whisper.cpp/bindings/go
-github.com/ggerganov/whisper.cpp/bindings/go/pkg/whisper

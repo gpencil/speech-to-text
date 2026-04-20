@@ -1,46 +1,36 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$ROOT"
 
 echo "========================================="
-echo "  离线语音识别工具 - 安装脚本"
+echo "  FunASR 语音识别 — 环境准备"
 echo "========================================="
-echo ""
 
-# 检查 ffmpeg
-echo "1. 检查 ffmpeg..."
-if ! command -v ffmpeg &> /dev/null; then
-    echo "   ffmpeg 未安装，正在安装..."
-    brew install ffmpeg
+if ! command -v ffmpeg &>/dev/null; then
+  echo "安装 ffmpeg（需要 brew）…"
+  arch -arm64 brew install ffmpeg
 else
-    echo "   ffmpeg 已安装"
+  echo "ffmpeg: ok"
 fi
 
-# 检查 Python3
-echo ""
-echo "2. 检查 Python3..."
-if ! command -v python3 &> /dev/null; then
-    echo "   错误: 未找到 Python3，请先安装"
-    exit 1
-else
-    python3 --version
+PY="${PYTHON:-}"
+if [[ -z "$PY" ]] && [[ -x "/opt/homebrew/bin/python3" ]]; then
+  PY="/opt/homebrew/bin/python3"
+elif [[ -z "$PY" ]]; then
+  PY="$(command -v python3)"
 fi
 
-# 安装 faster-whisper
-echo ""
-echo "3. 安装 faster-whisper..."
-pip3 install faster-whisper
+VENV="${ROOT}/.venv"
+if [[ ! -d "$VENV" ]]; then
+  echo "创建 venv: $VENV"
+  "$PY" -m venv "$VENV"
+fi
+echo "使用: $VENV/bin/python"
+"$VENV/bin/python" -m pip install -U pip
+"$VENV/bin/pip" install -r "$ROOT/requirements.txt"
 
-# 编译 Go 程序
 echo ""
-echo "4. 编译 Go 程序..."
-go build -o speech-to-text
-
-echo ""
-echo "========================================="
-echo "  安装完成！"
-echo "========================================="
-echo ""
-echo "运行以下命令启动服务器："
-echo "  ./speech-to-text"
-echo ""
-echo "然后访问: http://localhost:8888"
+echo "启动服务:"
+echo "  $VENV/bin/python $ROOT/server.py"
+echo "  浏览器打开 http://localhost:8888"
